@@ -1,4 +1,5 @@
 #include <netinet/in.h>
+#include <opus/opus.h>
 #include <portaudio.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -8,12 +9,13 @@
 #include <cstring>
 #include <iostream>
 #include <thread>
+#include <vector>
 
-#define SAMPLE_RATE 44100
-#define FRAMES_PER_BUFFER 512
+#define SAMPLE_RATE 48000
+#define FRAMES_PER_BUFFER 480
 #define NUM_CHANNELS 2
 #define SAMPLE_TYPE paInt16
-typedef short SAMPLE;
+#define OPUS_MAX_PACKET_SIZE 4000
 
 std::atomic<bool> client_running(true);
 int client_socket;
@@ -27,69 +29,52 @@ void signal_handler(int signal) {
   }
 }
 
-void receive_messages() {
-  char buffer[1024];
-  while (client_running) {
-    memset(buffer, 0, sizeof(buffer));
-    ssize_t bytes_received = recv(client_socket, buffer, sizeof(buffer), 0);
-    if (bytes_received <= 0) {
-      std::cerr << "Server disconnected or error occurred." << std::endl;
-      client_running = false;
-      break;
-    }
-    std::cout << "Server: " << buffer << std::endl;
-  }
-  close(client_socket);
-}
-
-/**
- *Записывает звук с устройства ввода по умолчанию и отправляет его на сервер
- *через данный сокет.
- */
 void record_and_send() {
-  // Инициализируем ПортАудио
+  // Инициализация Opus кодека
+  int error;
+  OpusEncoder *encoder = opus_encoder_create(SAMPLE_RATE, NUM_CHANNELS,
+                                             OPUS_APPLICATION_VOIP, &error);
+  if (error != OPUS_OK) {
+    std::cerr << "Failed to create Opus encoder: " << opus_strerror(error)
+              << std::endl;
+    return;
+  }
+
   PaStreamParameters inputParameters;
   PaStream *stream;
   PaError err;
-  SAMPLE buffer[FRAMES_PER_BUFFER * NUM_CHANNELS];
+  int buffer[FRAMES_PER_BUFFER * NUM_CHANNELS] = {0};
+  unsigned char opus_data[OPUS_MAX_PACKET_SIZE];
 
   err = Pa_Initialize();
   if (err != paNoError) {
-    // Распечатываем сообщение об ошибке PortAudio и выходим
     std::cerr << "PortAudio error: " << Pa_GetErrorText(err) << std::endl;
     return;
   }
 
-  // Получаем устройство ввода по умолчанию
   inputParameters.device = Pa_GetDefaultInputDevice();
   if (inputParameters.device == paNoDevice) {
-    // Выводим сообщение об ошибке и выходим
     std::cerr << "Error: No default input device." << std::endl;
     Pa_Terminate();
     return;
   }
 
-  // Устанавливаем входные параметры
   inputParameters.channelCount = NUM_CHANNELS;
   inputParameters.sampleFormat = SAMPLE_TYPE;
   inputParameters.suggestedLatency =
       Pa_GetDeviceInfo(inputParameters.device)->defaultLowInputLatency;
   inputParameters.hostApiSpecificStreamInfo = NULL;
 
-  // Открыть поток PortAudio
   err = Pa_OpenStream(&stream, &inputParameters, NULL, SAMPLE_RATE,
                       FRAMES_PER_BUFFER, paClipOff, NULL, NULL);
   if (err != paNoError) {
-    // Распечатываем сообщение об ошибке PortAudio и выходим
     std::cerr << "PortAudio error: " << Pa_GetErrorText(err) << std::endl;
     Pa_Terminate();
     return;
   }
 
-  // Начинаем запись и отправку звука
   err = Pa_StartStream(stream);
   if (err != paNoError) {
-    // Распечатываем сообщение об ошибке PortAudio и выходим
     std::cerr << "PortAudio error: " << Pa_GetErrorText(err) << std::endl;
     Pa_CloseStream(stream);
     Pa_Terminate();
@@ -97,24 +82,30 @@ void record_and_send() {
   }
 
   while (client_running) {
-    // Читаем аудио с устройства ввода
     err = Pa_ReadStream(stream, buffer, FRAMES_PER_BUFFER);
     if (err && err != paInputOverflowed) {
-      // Распечатываем сообщение об ошибке PortAudio и выходим
       std::cerr << "PortAudio error: " << Pa_GetErrorText(err) << std::endl;
       break;
     }
 
-    // Отправляем аудио на сервер
-    send(client_socket, buffer, sizeof(buffer), 0);
+    // Кодирование аудио данных с использованием Opus
+    int opus_length =
+        opus_encode(encoder, (const opus_int16 *)buffer, FRAMES_PER_BUFFER,
+                    opus_data, OPUS_MAX_PACKET_SIZE);
+    if (opus_length < 0) {
+      std::cerr << "Opus encoding error: " << opus_strerror(opus_length)
+                << std::endl;
+      break;
+    }
+
+    // Отправка закодированных данных на сервер
+    send(client_socket, opus_data, opus_length, 0);
   }
 
-  // Остановим и закроем поток PortAudio
   Pa_StopStream(stream);
   Pa_CloseStream(stream);
-
-  // Завершение работы PortAudio
   Pa_Terminate();
+  opus_encoder_destroy(encoder);
 }
 
 int main() {
@@ -137,10 +128,7 @@ int main() {
     return 2;
   }
 
-  std::thread receive_thread(receive_messages);
   std::thread record_thread(record_and_send);
-
-  receive_thread.join();
   record_thread.join();
 
   close(client_socket);
