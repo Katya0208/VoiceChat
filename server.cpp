@@ -1,5 +1,6 @@
 #include <netinet/in.h>
 #include <opus/opus.h>
+#include <portaudio.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -39,6 +40,57 @@ void saveAudioDataToFile(const std::vector<SAMPLE_TYPE> &audioData) {
   }
 }
 
+void play_audio(const std::vector<SAMPLE_TYPE> &audioData) {
+  PaError err;
+  PaStream *stream;
+
+  err = Pa_Initialize();
+  if (err != paNoError) {
+    std::cerr << "PortAudio error: " << Pa_GetErrorText(err) << std::endl;
+    return;
+  }
+
+  PaStreamParameters outputParameters;
+  outputParameters.device = Pa_GetDefaultOutputDevice();
+  if (outputParameters.device == paNoDevice) {
+    std::cerr << "Error: No default output device." << std::endl;
+    Pa_Terminate();
+    return;
+  }
+  outputParameters.channelCount = NUM_CHANNELS;
+  outputParameters.sampleFormat = paInt16;
+  outputParameters.suggestedLatency =
+      Pa_GetDeviceInfo(outputParameters.device)->defaultLowOutputLatency;
+  outputParameters.hostApiSpecificStreamInfo = NULL;
+
+  err = Pa_OpenStream(&stream, NULL, &outputParameters, SAMPLE_RATE,
+                      FRAMES_PER_BUFFER, paClipOff, NULL, NULL);
+  if (err != paNoError) {
+    std::cerr << "PortAudio error: " << Pa_GetErrorText(err) << std::endl;
+    Pa_Terminate();
+    return;
+  }
+
+  err = Pa_StartStream(stream);
+  if (err != paNoError) {
+    std::cerr << "PortAudio error: " << Pa_GetErrorText(err) << std::endl;
+    Pa_CloseStream(stream);
+    Pa_Terminate();
+    return;
+  }
+
+  // Воспроизведение аудиоданных
+  err =
+      Pa_WriteStream(stream, audioData.data(), audioData.size() / NUM_CHANNELS);
+  if (err != paNoError) {
+    std::cerr << "PortAudio error: " << Pa_GetErrorText(err) << std::endl;
+  }
+
+  Pa_StopStream(stream);
+  Pa_CloseStream(stream);
+  Pa_Terminate();
+}
+
 void handle_client(int client_socket) {
   char opus_data[OPUS_MAX_PACKET_SIZE];
   std::vector<SAMPLE_TYPE> audioData;
@@ -76,6 +128,9 @@ void handle_client(int client_socket) {
 
   opus_decoder_destroy(decoder);
   saveAudioDataToFile(audioData);
+
+  // Воспроизведение аудиофайла после завершения сессии клиента
+  play_audio(audioData);
 }
 
 void signal_handler(int signal) {

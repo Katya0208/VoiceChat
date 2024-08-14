@@ -29,7 +29,7 @@ void signal_handler(int signal) {
   }
 }
 
-void record_and_send() {
+void record_and_send(int deviceIndex) {
   // Инициализация Opus кодека
   int error;
   OpusEncoder *encoder = opus_encoder_create(SAMPLE_RATE, NUM_CHANNELS,
@@ -58,7 +58,7 @@ void record_and_send() {
     Pa_Terminate();
     return;
   }
-
+  inputParameters.device = deviceIndex;
   inputParameters.channelCount = NUM_CHANNELS;
   inputParameters.sampleFormat = SAMPLE_TYPE;
   inputParameters.suggestedLatency =
@@ -128,7 +128,7 @@ int main() {
     return 2;
   }
 
-  std::thread record_thread(record_and_send);
+  std::thread record_thread(record_and_send, 4);
   record_thread.join();
 
   close(client_socket);

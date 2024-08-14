@@ -5,7 +5,7 @@ all: clean server client
 
 # Целевые исполняемые файлы
 server: server.cpp 
-	$(CXX) -o server server.cpp -lopus
+	$(CXX) -o server server.cpp -lopus -lportaudio
 
 client: client.cpp
 	$(CXX) -o client client.cpp -lportaudio -lopus
