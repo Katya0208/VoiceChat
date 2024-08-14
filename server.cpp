@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <cstring>
@@ -19,9 +20,16 @@
 #define OPUS_MAX_PACKET_SIZE 4000
 
 std::atomic<bool> server_running(true);
+std::vector<int> clients;
 int server_socket;
 
+void logMessage(const std::string &message) {
+  std::ofstream logFile("server.log", std::ios_base::app);
+  logFile << message << std::endl;
+  logFile.close();
+}
 void saveAudioDataToFile(const std::vector<SAMPLE_TYPE> &audioData) {
+  logMessage("Saving audio data to file.");
   std::ofstream outFile("recorded_audio.raw", std::ios::binary);
   if (!outFile) {
     std::cerr << "Error opening file for writing." << std::endl;
@@ -41,6 +49,7 @@ void saveAudioDataToFile(const std::vector<SAMPLE_TYPE> &audioData) {
 }
 
 void play_audio(const std::vector<SAMPLE_TYPE> &audioData) {
+  logMessage("Playing audio data.");
   PaError err;
   PaStream *stream;
 
@@ -91,46 +100,47 @@ void play_audio(const std::vector<SAMPLE_TYPE> &audioData) {
   Pa_Terminate();
 }
 
-void handle_client(int client_socket) {
-  char opus_data[OPUS_MAX_PACKET_SIZE];
-  std::vector<SAMPLE_TYPE> audioData;
-
-  // Инициализация Opus декодера
-  int error;
-  OpusDecoder *decoder = opus_decoder_create(SAMPLE_RATE, NUM_CHANNELS, &error);
-  if (error != OPUS_OK) {
-    std::cerr << "Failed to create Opus decoder: " << opus_strerror(error)
-              << std::endl;
-    close(client_socket);
-    return;
-  }
-
+void receive_data(int &client_socket, char *opus_data, int &received) {
+  logMessage("Receiving data.");
   while (server_running) {
-    int received = recv(client_socket, opus_data, sizeof(opus_data), 0);
+    received = recv(client_socket, opus_data, sizeof(opus_data), 0);
     if (received <= 0) {
       std::cerr << "Client disconnected or error occurred." << std::endl;
       close(client_socket);
       break;
     }
+  }
+}
 
-    SAMPLE_TYPE decoded_data[FRAMES_PER_BUFFER * NUM_CHANNELS];
-    int frame_count = opus_decode(decoder, (const unsigned char *)opus_data,
-                                  received, decoded_data, FRAMES_PER_BUFFER, 0);
-    if (frame_count < 0) {
-      std::cerr << "Opus decoding error: " << opus_strerror(frame_count)
-                << std::endl;
-      break;
+void send_data(int &client_socket, char *opus_data, int &received) {
+  logMessage("Sending data.");
+  while (server_running) {
+    for (int other_client_socket : clients) {
+      if (other_client_socket != client_socket) {
+        send(other_client_socket, opus_data, received, 0);
+      }
     }
+  }
+}
 
-    audioData.insert(audioData.end(), decoded_data,
-                     decoded_data + frame_count * NUM_CHANNELS);
+void handle_client(int client_socket) {
+  logMessage("Add new client.");
+  clients.push_back(client_socket);
+
+  char opus_data[OPUS_MAX_PACKET_SIZE];
+  int received;
+
+  while (server_running) {
+    receive_data(client_socket, opus_data, received);
+    send_data(client_socket, opus_data, received);
   }
 
-  opus_decoder_destroy(decoder);
-  saveAudioDataToFile(audioData);
+  auto it = std::find(clients.begin(), clients.end(), client_socket);
+  if (it != clients.end()) {
+    clients.erase(it);
+  }
 
-  // Воспроизведение аудиофайла после завершения сессии клиента
-  play_audio(audioData);
+  close(client_socket);
 }
 
 void signal_handler(int signal) {
