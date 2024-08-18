@@ -178,6 +178,16 @@ void handle_client(int client_socket) {
   // Освобождаем ресурсы Opus
   opus_decoder_destroy(decoder);
 
+  {
+    std::lock_guard<std::mutex> lock(clients_mutex);
+    for (auto it = client_sockets.begin(); it != client_sockets.end(); ++it) {
+      if (*it == client_socket) {
+        client_sockets.erase(it);
+        break;  // Прерываем цикл, так как мы уже нашли и удалили нужный элемент
+      }
+    }
+  }
+
   close(client_socket);
 }
 
