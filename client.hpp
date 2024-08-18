@@ -1,3 +1,6 @@
+#include <X11/Xlib.h>
+#include <X11/keysym.h>
+#include <ncurses.h>
 #include <netinet/in.h>
 #include <opus/opus.h>
 #include <portaudio.h>
@@ -20,7 +23,10 @@
 #define OPUS_MAX_PACKET_SIZE 4000
 
 std::atomic<bool> client_running(true);
+std::atomic<bool> recording_start(true);
+
 int client_socket;
+std::vector<short> audio_buffer;
 
 void signal_handler(int signal);
 void record_and_send(int deviceIndex);
