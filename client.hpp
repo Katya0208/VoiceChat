@@ -1,6 +1,3 @@
-#include <X11/Xlib.h>
-#include <X11/keysym.h>
-#include <ncurses.h>
 #include <netinet/in.h>
 #include <opus/opus.h>
 #include <portaudio.h>
